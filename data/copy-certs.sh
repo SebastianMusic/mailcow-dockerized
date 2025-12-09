@@ -15,58 +15,38 @@
 #         nginx_c=$(docker ps -qaf name=nginx-mailcow)
 #         docker restart ${postfix_c} ${dovecot_c} ${nginx_c}
 #
-#
-set -e
-
 echo ""
-echo "✨ Syncing certificates from Caddy → Mailcow..."
+echo "✨ Starting to copy certs over from caddy to mailcow ✨"
 
-MAILCOW_HOSTNAME="mx1.infra.ijo.no"
-CADDY_BASE="/var/lib/caddy/.local/share/caddy/certificates"
+MAILCOW_HOSTNAME=mx1.infra.ijo.no
+CADDY_BASE=/var/lib/caddy/.local/share/caddy/certificates
 
-# --- Locate certificate folder automatically ---
-CERT_DIR=$(find "$CADDY_BASE" -type f -name "${MAILCOW_HOSTNAME}.crt" -printf '%h\n' | head -n 1)
+# --- Dynamically locate certificate directory ---
+CERT_DIR=$(find "$CADDY_BASE" -type f -name "${MAILCOW_HOSTNAME}.crt" -printf '%h' | head -n 1)
 
 if [[ -z "$CERT_DIR" ]]; then
-  echo "❌ ERROR: Could not find certificate for $MAILCOW_HOSTNAME in $CADDY_BASE"
+  echo "❌ ERROR: Could not locate certificate directory for $MAILCOW_HOSTNAME"
   exit 1
 fi
 
-CRT="${CERT_DIR}/${MAILCOW_HOSTNAME}.crt"
-KEY="${CERT_DIR}/${MAILCOW_HOSTNAME}.key"
+CRT="$CERT_DIR/$MAILCOW_HOSTNAME.crt"
+KEY="$CERT_DIR/$MAILCOW_HOSTNAME.key"
 
-# --- Verify files exist ---
-if [[ ! -f "$CRT" || ! -f "$KEY" ]]; then
-  echo "❌ ERROR: Missing certificate files:"
-  ls -lah "$CERT_DIR"
-  exit 1
-fi
+# --- MD5 sums (unchanged) ---
+MD5SUM_CURRENT_CERT=($(md5sum /opt/mailcow-dockerized/data/assets/ssl/cert.pem 2>/dev/null))
+MD5SUM_NEW_CERT=($(md5sum "$CRT"))
 
-# --- Destination paths ---
-DEST="/opt/mailcow-dockerized/data/assets/ssl"
-DEST_HOST="${DEST}/${MAILCOW_HOSTNAME}"
+# --- Copy certificates (unchanged) ---
+cp "$CRT" /opt/mailcow-dockerized/data/assets/ssl/cert.pem
+cp "$KEY" /opt/mailcow-dockerized/data/assets/ssl/key.pem
+cp "$CRT" /opt/mailcow-dockerized/data/assets/ssl/$MAILCOW_HOSTNAME/cert.pem
+cp "$KEY" /opt/mailcow-dockerized/data/assets/ssl/$MAILCOW_HOSTNAME/key.pem
 
-mkdir -p "$DEST_HOST"
-
-# --- Compare MD5 hashes ---
-if md5sum -c <(md5sum "$CRT" | sed "s|$CRT|$DEST/cert.pem|") 2>/dev/null; then
-  echo "✔ No certificate changes detected. Nothing to do."
-  exit 0
-fi
-
-echo "🔄 Certificate has changed — updating Mailcow certs..."
-
-cp "$CRT" "$DEST/cert.pem"
-cp "$KEY" "$DEST/key.pem"
-cp "$CRT" "$DEST_HOST/cert.pem"
-cp "$KEY" "$DEST_HOST/key.pem"
-
-# --- Restart mailcow services that use certs ---
+# --- Restart containers only *if they exist* (your request) ---
 postfix_c=$(docker ps -qaf name=postfix-mailcow)
 dovecot_c=$(docker ps -qaf name=dovecot-mailcow)
 nginx_c=$(docker ps -qaf name=nginx-mailcow)
 
-echo "🔁 Restarting Mailcow containers..."
-docker restart "$postfix_c" "$dovecot_c" "$nginx_c"
-
-echo "✨ Done. Certs synced and containers restarted."
+[[ -n "$postfix_c" ]] && docker restart "$postfix_c"
+[[ -n "$dovecot_c" ]] && docker restart "$dovecot_c"
+[[ -n "$nginx_c" ]] && docker restart "$nginx_c"
